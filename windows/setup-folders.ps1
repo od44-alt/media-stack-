@@ -11,9 +11,11 @@
 # ==============================================================================
 
 param(
-    [string]$ConfigDrive = "C:\MediaStack\config",
-    [string]$MediaRoot   = "D:\Media",
-    [string]$StashRoot   = "D:\Private\stash"
+    [string]$ConfigDrive = "E:\MediaStack\config",
+    [string]$MediaRoot   = "G:\Media",
+    [string]$StashRoot   = "F:\Private\stash",
+    [string]$SmbUser     = $env:USERNAME,
+    [switch]$CreateSmbShares
 )
 
 $ErrorActionPreference = "Stop"
@@ -21,7 +23,7 @@ $ErrorActionPreference = "Stop"
 Write-Host "=== 1. Creating Folder Structure ===" -ForegroundColor Cyan
 
 $directories = @(
-    # Docker container configs (SSD)
+    # Docker container configs (Internal SATA SSD: E:)
     "$ConfigDrive\gluetun",
     "$ConfigDrive\qbittorrent",
     "$ConfigDrive\prowlarr",
@@ -33,7 +35,7 @@ $directories = @(
     "$ConfigDrive\stash\cache",
     "$ConfigDrive\metube",
 
-    # Unified *arr + Plex media root (same drive for atomic moves & hardlinks)
+    # Unified *arr + Plex media root (Internal NVMe SSD: G: — single volume for atomic moves & hardlinks)
     "$MediaRoot\torrents\movies",
     "$MediaRoot\torrents\tv",
     "$MediaRoot\library\movies",
@@ -46,7 +48,7 @@ $directories = @(
     "$MediaRoot\editing\03_ingest_ready",
     "$MediaRoot\editing\04_archived_originals",
 
-    # Strictly isolated Private Stash library
+    # Strictly isolated Private Stash library (Dedicated Internal SATA SSD: F:)
     "$StashRoot\inbox",
     "$StashRoot\library",
     "$StashRoot\generated"
@@ -78,15 +80,32 @@ if ($hyperv.State -ne "Enabled") {
     Write-Host "  Hyper-V is already enabled!" -ForegroundColor Green
 }
 
-Write-Host "`n=== 4. Next Step: Create SMB Shares for Your Mac ===" -ForegroundColor Cyan
-Write-Host "Replace YOUR_WIN_USER with your Windows account name and run:" -ForegroundColor Yellow
-Write-Host @"
+Write-Host "`n=== 4. SMB Shares for Your Mac ===" -ForegroundColor Cyan
+$shares = @(
+    @{ Name = 'MediaEditing'; Path = "$MediaRoot\editing" },
+    @{ Name = 'HomeMovies';   Path = "$MediaRoot\library\home-movies" },
+    @{ Name = 'StashPrivate$'; Path = "$StashRoot\library" }
+)
+
+if ($CreateSmbShares) {
+    foreach ($share in $shares) {
+        if (Get-SmbShare -Name $share.Name -ErrorAction SilentlyContinue) {
+            Write-Host "  Exists:  \\$env:COMPUTERNAME\$($share.Name) -> $($share.Path)" -ForegroundColor DarkGray
+        } else {
+            New-SmbShare -Name $share.Name -Path $share.Path -FullAccess $SmbUser | Out-Null
+            Write-Host "  Created: \\$env:COMPUTERNAME\$($share.Name) -> $($share.Path) (FullAccess: $SmbUser)" -ForegroundColor Green
+        }
+    }
+} else {
+    Write-Host "Re-run with -CreateSmbShares (or run these commands individually) for user '$SmbUser':" -ForegroundColor Yellow
+    Write-Host @"
   # Share for Mac editing (DaVinci Resolve / LosslessCut / ingest script) + Home Movies
-  New-SmbShare -Name "MediaEditing" -Path "$MediaRoot\editing" -FullAccess "YOUR_WIN_USER"
-  New-SmbShare -Name "HomeMovies"   -Path "$MediaRoot\library\home-movies" -FullAccess "YOUR_WIN_USER"
+  New-SmbShare -Name 'MediaEditing' -Path "$MediaRoot\editing" -FullAccess "$SmbUser"
+  New-SmbShare -Name 'HomeMovies'   -Path "$MediaRoot\library\home-movies" -FullAccess "$SmbUser"
 
   # OPTIONAL: Hidden SMB share (trailing `$ hides it from network browsing) for private Infuse PIN-locked access
-  New-SmbShare -Name "StashPrivate`$" -Path "$StashRoot\library" -FullAccess "YOUR_WIN_USER"
+  New-SmbShare -Name 'StashPrivate`$' -Path "$StashRoot\library" -FullAccess "$SmbUser"
 "@ -ForegroundColor White
+}
 
 Write-Host "`nDone! Remember to also configure BIOS 'Restore on AC Power Loss = Power On' and set a static LAN IP / DHCP reservation for this PC." -ForegroundColor Green
