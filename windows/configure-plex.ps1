@@ -113,32 +113,55 @@ foreach ($lib in $desiredLibraries) {
     # Check if a library with the same title already exists (preserve its current folders and append ours)
     $sameTitle = $existingSections | Where-Object { $_.title -ieq $lib.Title } | Select-Object -First 1
     if ($sameTitle) {
-        $allPaths = @($sameTitle.Location | ForEach-Object { $_.path }) + $lib.Location
-        $putParts = @(
-            "name="     + [Uri]::EscapeDataString($sameTitle.title),
-            "type="     + [Uri]::EscapeDataString($sameTitle.type),
-            "agent="    + [Uri]::EscapeDataString($sameTitle.agent),
-            "scanner="  + [Uri]::EscapeDataString($sameTitle.scanner),
-            "language=" + [Uri]::EscapeDataString($(if ($sameTitle.language) { $sameTitle.language } else { "en-US" }))
-        ) + ($allPaths | ForEach-Object { "location=" + [Uri]::EscapeDataString($_) })
-        $putUrl = "$PlexUrl/library/sections/$($sameTitle.key)?" + ($putParts -join "&")
-        Invoke-WebRequest -Uri $putUrl -Method Put -Headers $headers -UseBasicParsing | Out-Null
-        Write-Host "  Updated: Added $($lib.Location) to existing '$($sameTitle.title)' library" -ForegroundColor Green
+        try {
+            $existingPaths = @($sameTitle.Location | ForEach-Object { $_.path } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            $allPaths = $existingPaths + $lib.Location
+            $putParts = @("agent=" + [Uri]::EscapeDataString($sameTitle.agent)) + ($allPaths | ForEach-Object { "location=" + [Uri]::EscapeDataString($_) })
+            $putUrl = "$PlexUrl/library/sections/$($sameTitle.key)?" + ($putParts -join "&")
+            Invoke-WebRequest -Uri $putUrl -Method Put -Headers $headers -UseBasicParsing | Out-Null
+            Write-Host "  Updated: Added $($lib.Location) to existing '$($sameTitle.title)' library" -ForegroundColor Green
+        } catch {
+            Write-Host "  Warning: Could not update existing '$($sameTitle.title)' library: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
         continue
     }
 
     # Create new library
-    $queryParts = @(
-        "name="     + [Uri]::EscapeDataString($lib.Title),
-        "type="     + [Uri]::EscapeDataString($lib.Type),
-        "agent="    + [Uri]::EscapeDataString($lib.Agent),
-        "scanner="  + [Uri]::EscapeDataString($lib.Scanner),
-        "language=en-US",
-        "location=" + [Uri]::EscapeDataString($lib.Location)
-    )
-    $postUrl = "$PlexUrl/library/sections?" + ($queryParts -join "&")
-    Invoke-WebRequest -Uri $postUrl -Method Post -Headers $headers -UseBasicParsing | Out-Null
-    Write-Host "  Created: '$($lib.Title)' -> $($lib.Location)" -ForegroundColor Green
+    try {
+        $queryParts = @(
+            "name="     + [Uri]::EscapeDataString($lib.Title),
+            "type="     + [Uri]::EscapeDataString($lib.Type),
+            "agent="    + [Uri]::EscapeDataString($lib.Agent),
+            "scanner="  + [Uri]::EscapeDataString($lib.Scanner),
+            "language=en-US",
+            "location=" + [Uri]::EscapeDataString($lib.Location)
+        )
+        $postUrl = "$PlexUrl/library/sections?" + ($queryParts -join "&")
+        Invoke-WebRequest -Uri $postUrl -Method Post -Headers $headers -UseBasicParsing | Out-Null
+        Write-Host "  Created: '$($lib.Title)' -> $($lib.Location)" -ForegroundColor Green
+    } catch {
+        if ($lib.Agent -eq "com.plexapp.agents.none") {
+            # Fallback for newer PMS builds that use tv.plex.agents.none / Plex Video Files
+            try {
+                $fallbackParts = @(
+                    "name="     + [Uri]::EscapeDataString($lib.Title),
+                    "type="     + [Uri]::EscapeDataString($lib.Type),
+                    "agent="    + [Uri]::EscapeDataString("tv.plex.agents.none"),
+                    "scanner="  + [Uri]::EscapeDataString("Plex Video Files"),
+                    "language=en-US",
+                    "location=" + [Uri]::EscapeDataString($lib.Location)
+                )
+                $fallbackUrl = "$PlexUrl/library/sections?" + ($fallbackParts -join "&")
+                Invoke-WebRequest -Uri $fallbackUrl -Method Post -Headers $headers -UseBasicParsing | Out-Null
+                Write-Host "  Created: '$($lib.Title)' -> $($lib.Location)" -ForegroundColor Green
+                continue
+            } catch {
+                Write-Host "  Warning: Could not create '$($lib.Title)' library: $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host "  Warning: Could not create '$($lib.Title)' library: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
 }
 
 # Print final library summary & verify isolation
