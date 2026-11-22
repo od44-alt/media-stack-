@@ -55,31 +55,43 @@ if ([string]::IsNullOrWhiteSpace($token)) {
     Write-Host "  2. Once signed in, re-run this script!" -ForegroundColor White
     exit 1
 }
-$headers = @{ "X-Plex-Token" = $token }
+$headers = @{
+    "X-Plex-Token"             = $token
+    "X-Plex-Client-Identifier" = "media-stack-setup"
+}
 Write-Host "  Found local Plex token (kept hidden)." -ForegroundColor Green
 
 # Ensure target library folders exist
 $desiredLibraries = @(
     @{
-        Title    = "Movies"
-        Type     = "movie"
-        Agent    = "tv.plex.agents.movie"
-        Scanner  = "Plex Movie"
-        Location = "$MediaRoot\library\movies"
+        Title      = "Movies"
+        Type       = "movie"
+        Location   = "$MediaRoot\library\movies"
+        Candidates = @(
+            @{ Agent = "tv.plex.agents.movie"; Scanner = "Plex Movie"; Language = "en-US" },
+            @{ Agent = "tv.plex.agents.movie"; Scanner = "Plex Movie"; Language = "en" }
+        )
     },
     @{
-        Title    = "TV Shows"
-        Type     = "show"
-        Agent    = "tv.plex.agents.series"
-        Scanner  = "Plex TV Series"
-        Location = "$MediaRoot\library\tv"
+        Title      = "TV Shows"
+        Type       = "show"
+        Location   = "$MediaRoot\library\tv"
+        Candidates = @(
+            @{ Agent = "tv.plex.agents.series"; Scanner = "Plex TV Series"; Language = "en-US" },
+            @{ Agent = "tv.plex.agents.series"; Scanner = "Plex TV Series"; Language = "en" },
+            @{ Agent = "com.plexapp.agents.thetvdb"; Scanner = "Plex Series Scanner"; Language = "en" }
+        )
     },
     @{
-        Title    = "Home Movies"
-        Type     = "movie"
-        Agent    = "com.plexapp.agents.none"
-        Scanner  = "Plex Video Files Scanner"
-        Location = "$MediaRoot\library\home-movies"
+        Title      = "Home Movies"
+        Type       = "movie"
+        Location   = "$MediaRoot\library\home-movies"
+        Candidates = @(
+            @{ Agent = "com.plexapp.agents.none"; Scanner = "Plex Video Files Scanner"; Language = "xn" },
+            @{ Agent = "com.plexapp.agents.none"; Scanner = "Plex Video Files"; Language = "xn" },
+            @{ Agent = "tv.plex.agents.none"; Scanner = "Plex Video Files"; Language = "xn" },
+            @{ Agent = "com.plexapp.agents.none"; Scanner = "Plex Video Files Scanner"; Language = "en-US" }
+        )
     }
 )
 
@@ -126,41 +138,31 @@ foreach ($lib in $desiredLibraries) {
         continue
     }
 
-    # Create new library
-    try {
-        $queryParts = @(
-            "name="     + [Uri]::EscapeDataString($lib.Title),
-            "type="     + [Uri]::EscapeDataString($lib.Type),
-            "agent="    + [Uri]::EscapeDataString($lib.Agent),
-            "scanner="  + [Uri]::EscapeDataString($lib.Scanner),
-            "language=en-US",
-            "location=" + [Uri]::EscapeDataString($lib.Location)
-        )
-        $postUrl = "$PlexUrl/library/sections?" + ($queryParts -join "&")
-        Invoke-WebRequest -Uri $postUrl -Method Post -Headers $headers -UseBasicParsing | Out-Null
-        Write-Host "  Created: '$($lib.Title)' -> $($lib.Location)" -ForegroundColor Green
-    } catch {
-        if ($lib.Agent -eq "com.plexapp.agents.none") {
-            # Fallback for newer PMS builds that use tv.plex.agents.none / Plex Video Files
-            try {
-                $fallbackParts = @(
-                    "name="     + [Uri]::EscapeDataString($lib.Title),
-                    "type="     + [Uri]::EscapeDataString($lib.Type),
-                    "agent="    + [Uri]::EscapeDataString("tv.plex.agents.none"),
-                    "scanner="  + [Uri]::EscapeDataString("Plex Video Files"),
-                    "language=en-US",
-                    "location=" + [Uri]::EscapeDataString($lib.Location)
-                )
-                $fallbackUrl = "$PlexUrl/library/sections?" + ($fallbackParts -join "&")
-                Invoke-WebRequest -Uri $fallbackUrl -Method Post -Headers $headers -UseBasicParsing | Out-Null
-                Write-Host "  Created: '$($lib.Title)' -> $($lib.Location)" -ForegroundColor Green
-                continue
-            } catch {
-                Write-Host "  Warning: Could not create '$($lib.Title)' library: $($_.Exception.Message)" -ForegroundColor Yellow
-            }
-        } else {
-            Write-Host "  Warning: Could not create '$($lib.Title)' library: $($_.Exception.Message)" -ForegroundColor Yellow
+    # Create new library (try candidate agent/scanner/language combos)
+    $created = $false
+    $lastErr = $null
+    foreach ($cand in $lib.Candidates) {
+        try {
+            $queryParts = @(
+                "name="     + [Uri]::EscapeDataString($lib.Title),
+                "type="     + [Uri]::EscapeDataString($lib.Type),
+                "agent="    + [Uri]::EscapeDataString($cand.Agent),
+                "scanner="  + [Uri]::EscapeDataString($cand.Scanner),
+                "language=" + [Uri]::EscapeDataString($cand.Language),
+                "location=" + [Uri]::EscapeDataString($lib.Location)
+            )
+            $postUrl = "$PlexUrl/library/sections?" + ($queryParts -join "&")
+            Invoke-WebRequest -Uri $postUrl -Method Post -Headers $headers -Body "" -UseBasicParsing | Out-Null
+            Write-Host "  Created: '$($lib.Title)' -> $($lib.Location) ($($cand.Agent) / $($cand.Language))" -ForegroundColor Green
+            $created = $true
+            break
+        } catch {
+            $lastErr = $_.Exception.Message
         }
+    }
+    if (-not $created) {
+        Write-Host "  Warning: Could not create '$($lib.Title)' library automatically ($lastErr)." -ForegroundColor Yellow
+        Write-Host "           Add manually in Plex Web ($PlexUrl/web): Settings -> Manage -> Libraries -> Add Library -> $($lib.Location)" -ForegroundColor DarkGray
     }
 }
 
@@ -191,7 +193,7 @@ $desiredPrefs = [ordered]@{
     "TranscoderToneMapping"            = "1"
     "FSEventLibraryUpdatesEnabled"     = "1"
     "FSEventLibraryPartialScanEnabled" = "1"
-    "LanNetworks"                      = $LanSubnets
+    "LanNetworksBandwidth"             = $LanSubnets
 }
 
 # Auto-select NVIDIA / RTX GPU if HardwareDevicePath exposes it in enumValues
