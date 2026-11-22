@@ -1,0 +1,158 @@
+# ==============================================================================
+# Personal Media Stack — Windows 11 Pro (Docker Desktop / WSL2)
+#
+# Architecture notes:
+#   - Plex Media Server runs NATIVELY on Windows 11 for full Intel QSV / NVENC
+#     hardware transcoding.
+#   - Home Assistant OS runs in a Hyper-V VM (Bridged NIC) for native mDNS,
+#     HomeKit Bridge, and Apple TV discovery.
+#   - *arr stack uses TRaSH Guides unified /data mount for instant atomic moves
+#     and zero-duplicate hardlinks.
+#   - Stash + MeTube are strictly isolated from /data and Plex.
+# ==============================================================================
+
+services:
+  # ----------------------------------------------------------------------------
+  # 1. VPN GATEWAY (Kill-Switch for Downloads)
+  # ----------------------------------------------------------------------------
+  gluetun:
+    image: qmcgaw/gluetun:latest
+    container_name: gluetun
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "8080:8080"   # qBittorrent Web UI
+      - "8081:8081"   # MeTube Web UI & iOS Share Sheet API (routed through VPN!)
+    environment:
+      - TZ=${TZ}
+      - VPN_SERVICE_PROVIDER=${VPN_SERVICE_PROVIDER}
+      - VPN_TYPE=${VPN_TYPE}
+      - OPENVPN_USER=${OPENVPN_USER}
+      - OPENVPN_PASSWORD=${OPENVPN_PASSWORD}
+      - OPENVPN_PROTOCOL=${OPENVPN_PROTOCOL}
+      - SERVER_COUNTRIES=${SERVER_COUNTRIES}
+      - FIREWALL_OUTBOUND_SUBNETS=${FIREWALL_OUTBOUND_SUBNETS}
+    volumes:
+      - ${CONFIG_ROOT}/gluetun:/gluetun
+    restart: unless-stopped
+
+  # ----------------------------------------------------------------------------
+  # 2. *ARR MEDIA AUTOMATION STACK (Plex Movies & TV)
+  # ----------------------------------------------------------------------------
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    container_name: qbittorrent
+    network_mode: "service:gluetun"
+    depends_on:
+      - gluetun
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+      - WEBUI_PORT=8080
+    volumes:
+      - ${CONFIG_ROOT}/qbittorrent:/config
+      - ${DATA_ROOT}/torrents:/data/torrents
+    restart: unless-stopped
+
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest
+    container_name: prowlarr
+    ports:
+      - "9696:9696"
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - ${CONFIG_ROOT}/prowlarr:/config
+    restart: unless-stopped
+
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    container_name: sonarr
+    ports:
+      - "8989:8989"
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - ${CONFIG_ROOT}/sonarr:/config
+      - ${DATA_ROOT}:/data
+    restart: unless-stopped
+
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    container_name: radarr
+    ports:
+      - "7878:7878"
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - ${CONFIG_ROOT}/radarr:/config
+      - ${DATA_ROOT}:/data
+    restart: unless-stopped
+
+  overseerr:
+    image: lscr.io/linuxserver/overseerr:latest
+    container_name: overseerr
+    ports:
+      - "5055:5055"
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TZ}
+    volumes:
+      - ${CONFIG_ROOT}/overseerr:/config
+    restart: unless-stopped
+
+  # ----------------------------------------------------------------------------
+  # 3. ISOLATED PRIVATE LIBRARY (Stash + MeTube yt-dlp Downloader)
+  #    Never mounted into Plex or *arr!
+  #    IMPORTANT: After first launch of Stash (http://localhost:9999), go to
+  #    Settings -> Security and set a Username + Password immediately.
+  # ----------------------------------------------------------------------------
+  stash:
+    image: stashapp/stash:latest
+    container_name: stash
+    ports:
+      - "9999:9999"
+    environment:
+      - STASH_STASH=/data
+      - STASH_GENERATED=/generated
+      - STASH_METADATA=/metadata
+      - STASH_CACHE=/cache
+      - STASH_PORT=9999
+      - TZ=${TZ}
+    volumes:
+      - ${CONFIG_ROOT}/stash/config:/root/.stash
+      - ${CONFIG_ROOT}/stash/metadata:/metadata
+      - ${CONFIG_ROOT}/stash/cache:/cache
+      - ${STASH_ROOT}/generated:/generated
+      - ${STASH_ROOT}/inbox:/data/inbox
+      - ${STASH_ROOT}/library:/data/library
+    restart: unless-stopped
+
+  metube:
+    image: ghcr.io/alexta69/metube:latest
+    container_name: metube
+    # Routed through Gluetun VPN for privacy; port 8081 is exposed on gluetun above.
+    # If any site blocks VPN IPs, change network_mode to default and expose "8081:8081" here.
+    network_mode: "service:gluetun"
+    depends_on:
+      - gluetun
+    environment:
+      - TZ=${TZ}
+      - DOWNLOAD_DIR=/downloads
+      - STATE_DIR=/state
+      - OUTPUT_TEMPLATE=%(uploader)s - %(title)s [%(id)s].%(ext)s
+      - YTDL_OPTIONS={"merge_output_format":"mp4","writesubtitles":false,"restrictfilenames":true}
+    volumes:
+      - ${STASH_ROOT}/inbox:/downloads
+      - ${CONFIG_ROOT}/metube:/state
+    restart: unless-stopped

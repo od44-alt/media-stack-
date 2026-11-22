@@ -1,0 +1,155 @@
+# ==============================================================================
+# Home Assistant — Apple TV, Cinema Lighting & Siri Voice Scripts
+#
+# Prerequisite integrations in Home Assistant (Settings -> Devices & Services):
+#   1. Apple TV (auto-discovered on Bridged Hyper-V LAN)
+#   2. Plex Media Server (connects to your native Windows 11 Plex server)
+#   3. HomeKit Bridge (exposes the scripts below to HomePod & iPhone Siri)
+#   4. Your lights (Philips Hue / Matter / HomeKit) & AVR/TV integration
+#
+# Replace placeholder entity_ids (media_player.living_room_apple_tv,
+# light.living_room_main, media_player.living_room_avr) with your real IDs.
+# ==============================================================================
+
+script:
+  # Triggered via Siri: "Hey Siri, turn on Movie Night" (or via Apple Home Scene)
+  movie_night:
+    alias: "Movie Night"
+    icon: mdi:movie-open
+    sequence:
+      # 1. Turn on Apple TV (also wakes HDMI-CEC TV & AVR automatically)
+      - service: remote.turn_on
+        target:
+          entity_id: remote.living_room_apple_tv
+      # 2. Optional: Explicit AVR power & input if not relying solely on HDMI-CEC
+      # - service: media_player.select_source
+      #   target:
+      #     entity_id: media_player.living_room_avr
+      #   data:
+      #     source: "Apple TV"
+      # 3. Launch Infuse (or change "Infuse" to "Plex")
+      - delay: "00:00:02"
+      - service: media_player.select_source
+        target:
+          entity_id: media_player.living_room_apple_tv
+        data:
+          source: "Infuse"
+      # 4. Dim living room lights smoothly over 3 seconds
+      - service: light.turn_on
+        target:
+          entity_id: light.living_room_main
+        data:
+          brightness_pct: 10
+          kelvin: 2700
+          transition: 3
+
+  # Triggered via Siri: "Hey Siri, Intermission"
+  intermission_mode:
+    alias: "Intermission"
+    icon: mdi:pause-circle
+    sequence:
+      - service: media_player.media_pause
+        target:
+          entity_id: media_player.living_room_apple_tv
+      - service: light.turn_on
+        target:
+          entity_id: light.living_room_main
+        data:
+          brightness_pct: 40
+          transition: 2
+
+  # Triggered via Siri: "Hey Siri, Living Room TV Off"
+  tv_all_off:
+    alias: "Living Room TV Off"
+    icon: mdi:television-off
+    sequence:
+      - service: remote.turn_off
+        target:
+          entity_id: remote.living_room_apple_tv
+      - service: light.turn_off
+        target:
+          entity_id: light.living_room_main
+        data:
+          transition: 3
+
+automation:
+  # ----------------------------------------------------------------------------
+  # Automatic Cinema Lighting: Dim when playing after sunset, raise on pause
+  # ----------------------------------------------------------------------------
+  - id: apple_tv_cinema_lights_play
+    alias: "Cinema Lights: Dim on Apple TV Play"
+    trigger:
+      - platform: state
+        entity_id: media_player.living_room_apple_tv
+        to: "playing"
+    condition:
+      - condition: sun
+        after: sunset
+        after_offset: "-00:30:00"
+      - condition: template
+        value_template: >
+          {{ state_attr('media_player.living_room_apple_tv', 'app_name')
+             in ['Infuse', 'Plex', 'Apple TV', 'Netflix', 'Disney+'] }}
+    action:
+      - service: light.turn_on
+        target:
+          entity_id: light.living_room_main
+        data:
+          brightness_pct: 8
+          transition: 3
+
+  - id: apple_tv_cinema_lights_pause
+    alias: "Cinema Lights: Gently Raise on Apple TV Pause"
+    trigger:
+      - platform: state
+        entity_id: media_player.living_room_apple_tv
+        from: "playing"
+        to: "paused"
+        for:
+          seconds: 2
+    condition:
+      - condition: sun
+        after: sunset
+        after_offset: "-00:30:00"
+    action:
+      - service: light.turn_on
+        target:
+          entity_id: light.living_room_main
+        data:
+          brightness_pct: 35
+          transition: 2
+
+  # ----------------------------------------------------------------------------
+  # Dynamic Hands-Free Voice Playback: iPhone/HomePod Siri Shortcut -> HA Webhook
+  # Shortcut sends POST to:
+  #   http://<HA_LAN_IP>:8123/api/webhook/play_plex_title
+  #   Body JSON: {"title": "Dune", "library": "Movies"}
+  # ----------------------------------------------------------------------------
+  - id: siri_play_plex_title_webhook
+    alias: "Siri Voice: Play Plex Title on Apple TV"
+    trigger:
+      - platform: webhook
+        webhook_id: play_plex_title
+        allowed_methods:
+          - POST
+        local_only: true
+    action:
+      - service: remote.turn_on
+        target:
+          entity_id: remote.living_room_apple_tv
+      - service: media_player.select_source
+        target:
+          entity_id: media_player.living_room_apple_tv
+        data:
+          source: "Plex"
+      - delay: "00:00:03"
+      # Uses Home Assistant's Plex integration to start playback on the Plex Apple TV client
+      # Replace media_player.plex_plex_for_apple_tv_living_room with your actual Plex client entity
+      - service: media_player.play_media
+        target:
+          entity_id: media_player.plex_plex_for_apple_tv_living_room
+        data:
+          media_content_type: movie
+          media_content_id: >
+            {{ {'library_name': trigger.json.library | default('Movies'),
+                'title': trigger.json.title} | to_json }}

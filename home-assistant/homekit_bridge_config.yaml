@@ -1,0 +1,27 @@
+# ==============================================================================
+# Home Assistant — Curated HomeKit Bridge Configuration
+#
+# Paste into your HA configuration.yaml (or configure via UI in
+# Settings -> Devices & Services -> HomeKit Bridge).
+#
+# Using an explicit `include_entities` allowlist keeps Apple Home / Siri clean
+# instead of flooding your Home app with hundreds of internal sensors.
+# ==============================================================================
+
+homekit:
+  - name: "Media Stack Bridge"
+    filter:
+      include_entities:
+        - script.movie_night
+        - script.intermission_mode
+        - script.tv_all_off
+        # Add any non-HomeKit lights, AVR power switches, or smart plugs here:
+        # - media_player.living_room_avr
+        # - light.living_room_bias_strip
+    entity_config:
+      script.movie_night:
+        name: "Movie Night"
+      script.intermission_mode:
+        name: "Intermission"
+      script.tv_all_off:
+        name: "Living Room TV Off"
