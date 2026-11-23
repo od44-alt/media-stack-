@@ -114,14 +114,14 @@ services:
   # ----------------------------------------------------------------------------
   # 3. ISOLATED PRIVATE LIBRARY (Stash + MeTube yt-dlp Downloader)
   #    Never mounted into Plex or *arr!
-  #    IMPORTANT: After first launch of Stash (http://localhost:9999), go to
+  #    IMPORTANT: After first launch of Stash (http://localhost:8999), go to
   #    Settings -> Security and set a Username + Password immediately.
   # ----------------------------------------------------------------------------
   stash:
     image: stashapp/stash:latest
     container_name: stash
     ports:
-      - "9999:9999"
+      - "${STASH_HOST_PORT:-8999}:9999"
     environment:
       - STASH_STASH=/data
       - STASH_GENERATED=/generated
