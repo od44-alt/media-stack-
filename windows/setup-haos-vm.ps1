@@ -15,7 +15,7 @@ param(
     [string]$VmDir          = "E:\MediaStack\haos",
     [string]$SwitchName     = "MediaStack-Bridged",
     [string]$NetAdapterName = "LadyJustice",
-    [int]$MemoryGB          = 4,
+    [int]$MemoryGB          = 2,
     [int]$CpuCount          = 2
 )
 
